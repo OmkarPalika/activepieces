@@ -1,15 +1,15 @@
 /// <reference types="vitest/globals" />
 
-import * as XLSX from 'xlsx';
+import { SheetWriter } from '@xlsxflow/core';
 import { createMockActionContext } from '@activepieces/pieces-framework';
 import { excelToCsvAction } from '../src/lib/actions/convert-excel-to-csv';
 
-function makeXlsxBase64(sheets: Record<string, (string | number)[][]>): string {
-  const wb = XLSX.utils.book_new();
+async function makeXlsxBase64(sheets: Record<string, (string | number)[][]>): Promise<string> {
+  const writer = new SheetWriter();
   for (const [name, rows] of Object.entries(sheets)) {
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name);
+    writer.addSheet(name, rows);
   }
-  return XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+  return Buffer.from(await new Response(writer.write()).arrayBuffer()).toString('base64');
 }
 
 describe('convert_excel_to_csv output schema', () => {
@@ -18,7 +18,7 @@ describe('convert_excel_to_csv output schema', () => {
   });
 
   test('every described path resolves, and nothing is left undescribed', async () => {
-    const base64 = makeXlsxBase64({
+    const base64 = await makeXlsxBase64({
       Employees: [['name'], ['Alice']],
       Products: [['sku'], ['P001']],
     });
@@ -37,7 +37,7 @@ describe('convert_excel_to_csv output schema', () => {
   });
 
   test('available_sheets lists every sheet in the workbook', async () => {
-    const base64 = makeXlsxBase64({
+    const base64 = await makeXlsxBase64({
       Employees: [['name'], ['Alice']],
       Products: [['sku'], ['P001']],
     });

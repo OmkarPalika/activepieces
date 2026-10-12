@@ -2,7 +2,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import * as XLSX from 'xlsx';
+import { SheetReader, SheetWriter, createBlobReader, type CellValue } from '@xlsxflow/core';
 import { createMockActionContext } from '@activepieces/pieces-framework';
 import { csvUtils } from '../src/lib/common/csv-utils';
 import { readCsvFileAction } from '../src/lib/actions/read-csv-file';
@@ -18,6 +18,20 @@ import { splitCsvAction } from '../src/lib/actions/split-csv';
 const fixture = (name: string) => fs.readFileSync(path.join(__dirname, 'fixtures', name));
 const fixtureText = (name: string) => fixture(name).toString('utf8');
 const asFile = (name: string) => ({ filename: name, extension: 'csv', data: fixture(name) });
+
+// Sheet names and every cell of the first sheet, keyed like 'A1'
+async function readXlsx(data: Buffer) {
+  const file = createBlobReader(new Blob([new Uint8Array(data)]));
+  const reader = new SheetReader();
+  const sheetNames = (await reader.readWorkbook(file)).sheets.map((sheet) => sheet.name);
+  const cells: Record<string, CellValue> = {};
+  for await (const row of await reader.parse(file)) {
+    row.cells.forEach((value, i) => {
+      cells[`${String.fromCharCode(65 + i)}${row.rowNumber}`] = value;
+    });
+  }
+  return { sheetNames, cells };
+}
 
 function withFileCapture<T extends { files: { write: unknown } }>(ctx: T) {
   const written: { fileName: string; data: Buffer }[] = [];
@@ -136,9 +150,7 @@ describe('read_csv_file', () => {
   });
 
   test('rejects an Excel file with a pointer to Convert Excel to CSV', async () => {
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a']]), 'S');
-    const data: Buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const data = Buffer.from(await new Response(new SheetWriter().addSheet('S', [['a']]).write()).arrayBuffer());
     await expect(run({ file: { filename: 'x.xlsx', data } })).rejects.toThrow(/Convert Excel to CSV/);
   });
 
@@ -213,19 +225,19 @@ describe('convert_csv_to_excel', () => {
   const run = async (propsValue: Record<string, unknown>) => {
     const { ctx, written } = withFileCapture(createMockActionContext({ propsValue: propsValue }));
     const out = await convertCsvToExcelAction.run(ctx);
-    const sheet = XLSX.read(written[0].data, { type: 'buffer' });
+    const sheet = await readXlsx(written[0].data);
     return { out, sheet, written };
   };
 
   test('keeps leading zeros and long ids as text, stores safe numbers as numbers', async () => {
     const { out, sheet } = await run({ csv_text: fixtureText('leading-zeros.csv') });
-    const ws = sheet.Sheets['Sheet1'];
-    expect(ws['A2']).toMatchObject({ t: 's', v: '01234' });
-    expect(ws['B2']).toMatchObject({ t: 's', v: '12345678901234567890' });
-    expect(ws['B3']).toMatchObject({ t: 's', v: '9007199254740993' });
-    expect(ws['C2']).toMatchObject({ t: 'n', v: 42.5 });
-    expect(ws['D2']).toMatchObject({ t: 's', v: 'TRUE' });
-    expect(ws['E2']).toMatchObject({ t: 'n', v: -3 });
+    const ws = sheet.cells;
+    expect(ws['A2']).toBe('01234');
+    expect(ws['B2']).toBe('12345678901234567890');
+    expect(ws['B3']).toBe('9007199254740993');
+    expect(ws['C2']).toBe(42.5);
+    expect(ws['D2']).toBe('TRUE');
+    expect(ws['E2']).toBe(-3);
     expect(out).toEqual({
       file_name: 'data.xlsx',
       url: 'https://files.test/data.xlsx',
@@ -236,7 +248,7 @@ describe('convert_csv_to_excel', () => {
 
   test('detect_numbers off keeps every cell as text', async () => {
     const { sheet } = await run({ csv_text: fixtureText('leading-zeros.csv'), detect_numbers: false });
-    expect(sheet.Sheets['Sheet1']['C2']).toMatchObject({ t: 's', v: '42.5' });
+    expect(sheet.cells['C2']).toBe('42.5');
   });
 
   test('semicolon input, custom sheet and file name, xlsx signature', async () => {
@@ -246,8 +258,8 @@ describe('convert_csv_to_excel', () => {
       file_name: 'orders',
     });
     expect(out.file_name).toBe('orders.xlsx');
-    expect(sheet.SheetNames).toEqual(['Orders']);
-    expect(sheet.Sheets['Orders']['B2']).toMatchObject({ v: '1,50' });
+    expect(sheet.sheetNames).toEqual(['Orders']);
+    expect(sheet.cells['B2']).toBe('1,50');
     expect(written[0].data[0]).toBe(0x50);
   });
 
@@ -458,7 +470,7 @@ describe('review fixes', () => {
   const excel = async (propsValue: Record<string, unknown>) => {
     const { ctx, written } = withFileCapture(createMockActionContext({ propsValue }));
     const out = await convertCsvToExcelAction.run(ctx);
-    return { out, ws: XLSX.read(written[0].data, { type: 'buffer' }).Sheets['Sheet1'] };
+    return { out, ws: (await readXlsx(written[0].data)).cells };
   };
   const createCsv = async (propsValue: Record<string, unknown>) => {
     const { ctx, written } = withFileCapture(createMockActionContext({ propsValue }));
@@ -487,17 +499,17 @@ describe('review fixes', () => {
 
   test('convert_csv_to_excel keeps numbers that would lose precision as text', async () => {
     const { ws } = await excel({ csv_text: 'a,b,c\n99999999999999.999999999999999,1234567890.12345,0.10\n' });
-    expect(ws['A2']).toMatchObject({ t: 's', v: '99999999999999.999999999999999' });
-    expect(ws['B2']).toMatchObject({ t: 'n', v: 1234567890.12345 });
-    expect(ws['C2']).toMatchObject({ t: 'n', v: 0.1 });
+    expect(ws['A2']).toBe('99999999999999.999999999999999');
+    expect(ws['B2']).toBe(1234567890.12345);
+    expect(ws['C2']).toBe(0.1);
   });
 
   test('convert_csv_to_excel keeps numeric headings as text unless there is no header row', async () => {
     const withHeader = await excel({ csv_text: '2026,2027\n1,2\n' });
-    expect(withHeader.ws['A1']).toMatchObject({ t: 's', v: '2026' });
-    expect(withHeader.ws['A2']).toMatchObject({ t: 'n', v: 1 });
+    expect(withHeader.ws['A1']).toBe('2026');
+    expect(withHeader.ws['A2']).toBe(1);
     const noHeader = await excel({ csv_text: '2026,2027\n1,2\n', has_header_row: false });
-    expect(noHeader.ws['A1']).toMatchObject({ t: 'n', v: 2026 });
+    expect(noHeader.ws['A1']).toBe(2026);
   });
 
   test('headerless files count every row against the limit', async () => {

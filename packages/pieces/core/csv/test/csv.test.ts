@@ -1,17 +1,17 @@
 /// <reference types="vitest/globals" />
 
-import * as XLSX from 'xlsx';
+import { SheetWriter } from '@xlsxflow/core';
 import { csvToJsonAction } from '../src/lib/actions/convert-csv-to-json';
 import { excelToCsvAction } from '../src/lib/actions/convert-excel-to-csv';
 import { jsonToCsvAction } from '../src/lib/actions/convert-json-to-csv';
 import { createMockActionContext } from '@activepieces/pieces-framework';
 
-function makeXlsxBase64(sheets: Record<string, (string | number)[][]>): string {
-  const wb = XLSX.utils.book_new();
+async function makeXlsxBase64(sheets: Record<string, (string | number)[][]>): Promise<string> {
+  const writer = new SheetWriter();
   for (const [name, rows] of Object.entries(sheets)) {
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name);
+    writer.addSheet(name, rows);
   }
-  return XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+  return Buffer.from(await new Response(writer.write()).arrayBuffer()).toString('base64');
 }
 
 describe('csvToJsonAction', () => {
@@ -157,7 +157,7 @@ describe('jsonToCsvAction', () => {
 
 describe('excelToCsvAction', () => {
   test('converts first sheet to CSV with comma delimiter', async () => {
-    const base64 = makeXlsxBase64({ Sheet1: [['name', 'age'], ['Alice', 30], ['Bob', 25]] });
+    const base64 = await makeXlsxBase64({ Sheet1: [['name', 'age'], ['Alice', 30], ['Bob', 25]] });
     const ctx = createMockActionContext({
       propsValue: { file: { base64, extension: 'xlsx', filename: 'test.xlsx' }, sheet_name: '', delimiter_type: ',' },
     });
@@ -170,7 +170,7 @@ describe('excelToCsvAction', () => {
   });
 
   test('uses tab delimiter', async () => {
-    const base64 = makeXlsxBase64({ Sheet1: [['name', 'age'], ['Alice', 30]] });
+    const base64 = await makeXlsxBase64({ Sheet1: [['name', 'age'], ['Alice', 30]] });
     const ctx = createMockActionContext({
       propsValue: { file: { base64, extension: 'xlsx', filename: 'test.xlsx' }, sheet_name: '', delimiter_type: '\t' },
     });
@@ -180,7 +180,7 @@ describe('excelToCsvAction', () => {
   });
 
   test('uses semicolon delimiter', async () => {
-    const base64 = makeXlsxBase64({ Sheet1: [['name', 'age'], ['Alice', 30]] });
+    const base64 = await makeXlsxBase64({ Sheet1: [['name', 'age'], ['Alice', 30]] });
     const ctx = createMockActionContext({
       propsValue: { file: { base64, extension: 'xlsx', filename: 'test.xlsx' }, sheet_name: '', delimiter_type: ';' },
     });
@@ -190,7 +190,7 @@ describe('excelToCsvAction', () => {
   });
 
   test('selects a named sheet from a multi-sheet workbook', async () => {
-    const base64 = makeXlsxBase64({
+    const base64 = await makeXlsxBase64({
       Employees: [['name'], ['Alice']],
       Products: [['sku'], ['P001']],
     });
@@ -205,7 +205,7 @@ describe('excelToCsvAction', () => {
   });
 
   test('defaults to first sheet when sheet_name is blank', async () => {
-    const base64 = makeXlsxBase64({
+    const base64 = await makeXlsxBase64({
       First: [['id'], [1]],
       Second: [['id'], [2]],
     });
@@ -217,7 +217,7 @@ describe('excelToCsvAction', () => {
   });
 
   test('throws when sheet name does not exist', async () => {
-    const base64 = makeXlsxBase64({ Sheet1: [['a'], [1]] });
+    const base64 = await makeXlsxBase64({ Sheet1: [['a'], [1]] });
     const ctx = createMockActionContext({
       propsValue: { file: { base64, extension: 'xlsx', filename: 'test.xlsx' }, sheet_name: 'Missing', delimiter_type: ',' },
     });

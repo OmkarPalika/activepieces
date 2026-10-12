@@ -1,5 +1,5 @@
 import { createAction, Property } from '@activepieces/pieces-framework';
-import * as XLSX from 'xlsx';
+import { SheetWriter } from '@xlsxflow/core';
 import { csvProps } from '../common/csv-props';
 import { csvUtils } from '../common/csv-utils';
 import { convertCsvToExcelOutputSchema } from '../output-schemas';
@@ -77,9 +77,8 @@ export const convertCsvToExcelAction = createAction({
       ),
     );
 
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(cells), sheetName);
-    const data: Buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+    const xlsx = new SheetWriter().addSheet(sheetName, cells).write();
+    const data = Buffer.from(await new Response(xlsx).arrayBuffer());
 
     const name = csvUtils.safeFileName({ requested: file_name, fallback: 'data.xlsx', extension: 'xlsx' });
     const url = await context.files.write({ fileName: name, data });

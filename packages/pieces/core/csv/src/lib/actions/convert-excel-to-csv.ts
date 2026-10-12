@@ -1,5 +1,5 @@
 import { createAction, Property } from '@activepieces/pieces-framework';
-import * as XLSX from 'xlsx';
+import { SheetReader, createBlobReader, type CellValue } from '@xlsxflow/core';
 import { excelToCsvActionOutputSchema } from '../output-schemas';
 
 export const excelToCsvAction = createAction({
@@ -52,23 +52,44 @@ export const excelToCsvAction = createAction({
       );
     }
 
-    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const workbook = createBlobReader(new Blob([buffer]));
+    const reader = new SheetReader();
+    const sheetNames = (await reader.readWorkbook(workbook)).sheets.map((sheet) => sheet.name);
 
-    const targetSheet = sheet_name?.trim() || workbook.SheetNames[0];
+    const targetSheet = sheet_name?.trim() || sheetNames[0];
 
-    if (!workbook.SheetNames.includes(targetSheet)) {
+    if (!sheetNames.includes(targetSheet)) {
       throw new Error(
-        `Sheet "${targetSheet}" not found. Available sheets: ${workbook.SheetNames.join(', ')}`
+        `Sheet "${targetSheet}" not found. Available sheets: ${sheetNames.join(', ')}`
       );
     }
 
-    const worksheet = workbook.Sheets[targetSheet];
-    const csv = XLSX.utils.sheet_to_csv(worksheet, { FS: delimiter_type });
+    // Cells as Excel shows them, missing rows as blank lines and every line as wide as the widest
+    const lines: string[][] = [];
+    let width = 0;
+    for await (const row of await reader.parse(workbook, { sheetName: targetSheet, formatted: true })) {
+      while (lines.length < row.rowNumber - 1) lines.push([]);
+      lines.push(row.cells.map((value, i) => row.formatted?.[i] ?? toText(value)));
+      width = Math.max(width, row.cells.length);
+    }
+    const csv = lines
+      .map((line) => Array.from({ length: width }, (_, i) => quote(line[i] ?? '', delimiter_type)).join(delimiter_type))
+      .join('\n');
 
     return {
       csv,
       sheet_name: targetSheet,
-      available_sheets: workbook.SheetNames,
+      available_sheets: sheetNames,
     };
   },
 });
+
+function toText(value: CellValue): string {
+  if (value == null) return '';
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
+}
+
+function quote(text: string, delimiter: string): string {
+  return text.includes(delimiter) || /["\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
